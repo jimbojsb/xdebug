@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2018 Derick Rethans                               |
+   | Copyright (c) 2002-2020 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -53,7 +53,6 @@
 
 #include "debugger_private.h"
 #include "handler_dbgp.h"
-#include "lib/private.h"
 
 ZEND_EXTERN_MODULE_GLOBALS(xdebug)
 
@@ -416,6 +415,9 @@ static void xdebug_init_debugger()
 
 			zend_string_release(ini_val);
 			zend_string_release(ini_name);
+
+			xdebug_mark_debug_connection_active();
+			XG_DBG(context).handler->cmdloop(&(XG_DBG(context)), XDEBUG_CMDLOOP_BLOCK, XDEBUG_CMDLOOP_BAIL);
 		}
 	} else if (XG_DBG(context).socket == -1) {
 		XG_DBG(context).handler->log(XDEBUG_LOG_ERR, "Could not connect to client. :-(\n");
@@ -450,28 +452,6 @@ int xdebug_is_debug_connection_active()
 	);
 }
 
-int xdebug_is_debug_connection_active_for_current_pid()
-{
-	zend_ulong pid;
-
-	/* Early return to save some getpid() calls */
-	if (!xdebug_is_debug_connection_active()) {
-		return 0;
-	}
-
-	pid = xdebug_get_pid();
-
-	/* Start debugger if previously a connection was established and this
-	 * process no longer has the same PID */
-	if (XG_DBG(remote_connection_pid) != pid) {
-		xdebug_restart_debugger();
-	}
-
-	return (
-		XG_DBG(remote_connection_enabled) && (XG_DBG(remote_connection_pid) == pid)
-	);
-}
-
 void xdebug_mark_debug_connection_active()
 {
 	XG_DBG(remote_connection_enabled) = 1;
@@ -499,7 +479,7 @@ void xdebug_do_jit()
 {
 	if (
 		(XINI_DBG(remote_mode) == XDEBUG_JIT) &&
-		!xdebug_is_debug_connection_active_for_current_pid() &&
+		!xdebug_is_debug_connection_active() &&
 		XINI_DBG(remote_enable)
 	) {
 		xdebug_init_debugger();
@@ -567,13 +547,17 @@ static void xdebug_handle_stop_session()
 
 void xdebug_do_req(void)
 {
+	if (XG_DBG(detached)) {
+		return;
+	}
+
 	if (XINI_DBG(remote_mode) != XDEBUG_REQ) {
 		return;
 	}
 
 	if (
 		XINI_DBG(remote_enable) &&
-		!xdebug_is_debug_connection_active_for_current_pid() &&
+		!xdebug_is_debug_connection_active() &&
 		(XINI_DBG(remote_autostart) || xdebug_handle_start_session())
 	) {
 		xdebug_init_debugger();

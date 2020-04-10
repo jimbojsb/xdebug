@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2019 Derick Rethans                               |
+   | Copyright (c) 2002-2020 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -19,6 +19,7 @@
 #define XDEBUG_TRACING_H
 
 #include "php.h"
+#include "zend_generators.h"
 
 typedef struct
 {
@@ -43,7 +44,6 @@ typedef struct _xdebug_tracing_settings_t {
 	zend_bool     auto_trace;
 	zend_bool     trace_enable_trigger;
 	char         *trace_enable_trigger_value;
-	char         *trace_output_dir;
 	char         *trace_output_name;
 	zend_long     trace_options;
 	zend_long     trace_format;

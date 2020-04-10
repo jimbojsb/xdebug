@@ -19,7 +19,8 @@
 #include "php.h"
 #include "TSRM.h"
 #include "php_globals.h"
-#include "Zend/zend_closures.h"
+#include "zend_closures.h"
+#include "zend_exceptions.h"
 
 #include "php_xdebug.h"
 
@@ -41,10 +42,10 @@ zend_op_array* (*old_compile_file)(zend_file_handle* file_handle, int type);
 static void (*xdebug_old_execute_ex)(zend_execute_data *execute_data);
 static void (*xdebug_old_execute_internal)(zend_execute_data *current_execute_data, zval *return_value);
 
-static int xdebug_silence_handler(zend_execute_data *execute_data)
+static int xdebug_silence_handler(XDEBUG_OPCODE_HANDLER_ARGS)
 {
 	zend_op_array *op_array = &execute_data->func->op_array;
-	const zend_op *cur_opcode = EG(current_execute_data)->opline;
+	const zend_op *cur_opcode = execute_data->opline;
 
 	xdebug_coverage_record_silence_if_active(execute_data, op_array);
 
@@ -57,7 +58,8 @@ static int xdebug_silence_handler(zend_execute_data *execute_data)
 		}
 		return ZEND_USER_OPCODE_CONTINUE;
 	}
-	return ZEND_USER_OPCODE_DISPATCH;
+
+	return xdebug_call_original_opcode_handler_if_set(cur_opcode->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 }
 
 static void xdebug_throw_exception_hook(zval *exception)
@@ -252,11 +254,13 @@ static void add_used_variables(function_stack_entry *fse, zend_op_array *op_arra
 
 
 /* Opcode handler for exit, to be able to clean up the profiler */
-int xdebug_exit_handler(zend_execute_data *execute_data)
+int xdebug_exit_handler(XDEBUG_OPCODE_HANDLER_ARGS)
 {
+	const zend_op *cur_opcode = execute_data->opline;
+
 	xdebug_profiler_exit_handler();
 
-	return ZEND_USER_OPCODE_DISPATCH;
+	return xdebug_call_original_opcode_handler_if_set(cur_opcode->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 }
 
 
@@ -298,18 +302,11 @@ static void xdebug_execute_ex(zend_execute_data *execute_data)
 	xdebug_debugger_set_program_name(op_array->filename);
 
 	if (XG_BASE(in_execution)) {
-		/* Start debugger if this is the first main script, or previously a
-		 * connection was established and this process no longer has the same
-		 * PID */
-		if (
-			XG_BASE(level) == 0 ||
-			(xdebug_is_debug_connection_active() && !xdebug_is_debug_connection_active_for_current_pid())
-		) {
+		/* Start debugger if this is the first main script */
+		if (XG_BASE(level) == 0) {
 			/* Start remote context if requested */
 			xdebug_do_req();
-		}
 
-		if (XG_BASE(level) == 0) {
 			xdebug_gcstats_init_if_requested(op_array);
 			xdebug_profiler_init_if_requested(op_array);
 			xdebug_tracing_init_if_requested(op_array);
@@ -343,7 +340,7 @@ static void xdebug_execute_ex(zend_execute_data *execute_data)
 		fse->This = NULL;
 	}
 
-	if (XG_BASE(stack) && (XINI_BASE(collect_vars) || XINI_BASE(show_local_vars) || xdebug_is_debug_connection_active_for_current_pid())) {
+	if (XG_BASE(stack) && (XINI_BASE(collect_vars) || XINI_BASE(show_local_vars) || xdebug_is_debug_connection_active())) {
 		/* Because include/require is treated as a stack level, we have to add used
 		 * variables in include/required files to all the stack levels above, until
 		 * we hit a function or the top level stack.  This is so that the variables
@@ -513,6 +510,16 @@ static void xdebug_overloaded_functions_setup(void)
 	} else {
 		XG_BASE(orig_pcntl_exec_func) = NULL;
 	}
+
+	/* Override pcntl_fork with our own function to be able
+	 * to start the debugger for the forked process */
+	orig = zend_hash_str_find_ptr(EG(function_table), "pcntl_fork", sizeof("pcntl_fork") - 1);
+	if (orig) {
+		XG_BASE(orig_pcntl_fork_func) = orig->internal_function.handler;
+		orig->internal_function.handler = zif_xdebug_pcntl_fork;
+	} else {
+		XG_BASE(orig_pcntl_fork_func) = NULL;
+	}
 }
 
 static void xdebug_overloaded_functions_restore(void)
@@ -532,6 +539,13 @@ static void xdebug_overloaded_functions_restore(void)
 		orig = zend_hash_str_find_ptr(EG(function_table), "pcntl_exec", sizeof("pcntl_exec") - 1);
 		if (orig) {
 			orig->internal_function.handler = XG_BASE(orig_pcntl_exec_func);
+		}
+	}
+
+	if (XG_BASE(orig_pcntl_fork_func)) {
+		orig = zend_hash_str_find_ptr(EG(function_table), "pcntl_fork", sizeof("pcntl_fork") - 1);
+		if (orig) {
+			orig->internal_function.handler = XG_BASE(orig_pcntl_fork_func);
 		}
 	}
 }
@@ -567,8 +581,8 @@ void xdebug_base_minit(INIT_FUNC_ARGS)
 	zend_execute_internal = xdebug_execute_internal;
 
 
-	zend_set_user_opcode_handler(ZEND_BEGIN_SILENCE, xdebug_silence_handler);
-	zend_set_user_opcode_handler(ZEND_END_SILENCE, xdebug_silence_handler);
+	xdebug_set_opcode_handler(ZEND_BEGIN_SILENCE, xdebug_silence_handler);
+	xdebug_set_opcode_handler(ZEND_END_SILENCE, xdebug_silence_handler);
 
 	REGISTER_LONG_CONSTANT("XDEBUG_STACK_NO_DESC", XDEBUG_STACK_NO_DESC, CONST_CS | CONST_PERSISTENT);
 
@@ -635,7 +649,6 @@ void xdebug_base_rinit()
 	XG_BASE(filters_tracing)           = xdebug_llist_alloc(xdebug_llist_string_dtor);
 	XG_BASE(filters_code_coverage)     = xdebug_llist_alloc(xdebug_llist_string_dtor);
 
-	/* Overload var_dump, set_time_limit, error_reporting, and pcntl_exec */
 	xdebug_overloaded_functions_setup();
 }
 

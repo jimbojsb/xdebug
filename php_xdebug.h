@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2019 Derick Rethans                               |
+   | Copyright (c) 2002-2020 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,8 +22,8 @@
 #define XDEBUG_NAME       "Xdebug"
 #define XDEBUG_VERSION    "3.0.0-dev"
 #define XDEBUG_AUTHOR     "Derick Rethans"
-#define XDEBUG_COPYRIGHT  "Copyright (c) 2002-2019 by Derick Rethans"
-#define XDEBUG_COPYRIGHT_SHORT "Copyright (c) 2002-2019"
+#define XDEBUG_COPYRIGHT  "Copyright (c) 2002-2020 by Derick Rethans"
+#define XDEBUG_COPYRIGHT_SHORT "Copyright (c) 2002-2020"
 #define XDEBUG_URL        "https://xdebug.org"
 #define XDEBUG_URL_FAQ    "https://xdebug.org/docs/faq#api"
 
@@ -32,6 +32,7 @@
 #include "coverage/branch_info.h"
 #include "coverage/code_coverage.h"
 #include "debugger/debugger.h"
+#include "lib/lib.h"
 #include "gcstats/gc_stats.h"
 #include "profiler/profiler.h"
 #include "tracing/tracing.h"
@@ -87,6 +88,7 @@ PHP_FUNCTION(xdebug_call_line);
 PHP_FUNCTION(xdebug_set_time_limit);
 PHP_FUNCTION(xdebug_error_reporting);
 PHP_FUNCTION(xdebug_pcntl_exec);
+PHP_FUNCTION(xdebug_pcntl_fork);
 
 PHP_FUNCTION(xdebug_var_dump);
 PHP_FUNCTION(xdebug_debug_zval);
@@ -147,6 +149,7 @@ struct xdebug_base_info {
 	zif_handler   orig_set_time_limit_func;
 	zif_handler   orig_error_reporting_func;
 	zif_handler   orig_pcntl_exec_func;
+	zif_handler   orig_pcntl_fork_func;
 	int           output_is_tty;
 	zend_bool     in_debug_info;
 	char         *last_exception_trace;
@@ -229,21 +232,13 @@ struct xdebug_base_info {
 	} settings;
 };
 
-struct xdebug_library_info
-{
-	zend_execute_data    *active_execute_data;
-	function_stack_entry *active_fse;
-	HashTable            *active_symbol_table;
-	zval                 *This;
-};
-
 ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	struct xdebug_base_info     base;
-	struct xdebug_library_info  library;
 	struct {
 		xdebug_coverage_globals_t coverage;
 		xdebug_debugger_globals_t debugger;
 		xdebug_gc_stats_globals_t gc_stats;
+		xdebug_library_globals_t  library;
 		xdebug_profiler_globals_t profiler;
 		xdebug_tracing_globals_t  tracing;
 	} globals;
@@ -251,6 +246,7 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 		xdebug_coverage_settings_t coverage;
 		xdebug_debugger_settings_t debugger;
 		xdebug_gc_stats_settings_t gc_stats;
+		xdebug_library_settings_t  library;
 		xdebug_profiler_settings_t profiler;
 		xdebug_tracing_settings_t  tracing;
 	} settings;
@@ -263,24 +259,6 @@ ZEND_END_MODULE_GLOBALS(xdebug)
 #endif
 
 #define XG_BASE(v)     (XG(base.v))
-#define XG_LIB(v )     (XG(library.v))
-
 #define XINI_BASE(v)     (XG(base.settings.v))
 
-/* Needed for code coverage as Zend doesn't always add EXT_STMT when expected */
-#define XDEBUG_SET_OPCODE_OVERRIDE_COMMON(oc) \
-	zend_set_user_opcode_handler(oc, xdebug_common_override_handler);
-
-#define XDEBUG_SET_OPCODE_OVERRIDE_ASSIGN(f,oc) \
-	zend_set_user_opcode_handler(oc, xdebug_##f##_handler);
-
 #endif
-
-
-/*
- * Local variables:
- * tab-width: 4
- * c-basic-offset: 4
- * indent-tabs-mode: t
- * End:
- */

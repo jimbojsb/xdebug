@@ -25,7 +25,6 @@
 #include "trace_html.h"
 
 #include "lib/compat.h"
-#include "lib/private.h"
 #include "lib/str.h"
 #include "lib/var_export_line.h"
 
@@ -62,16 +61,22 @@ FILE *xdebug_trace_open_file(char *fname, char *script_filename, long options, c
 	if (fname && strlen(fname)) {
 		filename = xdstrdup(fname);
 	} else {
+		char *output_dir = xdebug_lib_get_output_dir();
+
 		if (!strlen(XINI_TRACE(trace_output_name)) ||
 			xdebug_format_output_filename(&fname, XINI_TRACE(trace_output_name), script_filename) <= 0
 		) {
 			/* Invalid or empty xdebug.trace_output_name */
 			return NULL;
 		}
-		if (IS_SLASH(XINI_TRACE(trace_output_dir)[strlen(XINI_TRACE(trace_output_dir)) - 1])) {
-			filename = xdebug_sprintf("%s%s", XINI_TRACE(trace_output_dir), fname);
+
+		/* Add a slash if none is present in the output_dir setting */
+		output_dir = xdebug_lib_get_output_dir(); /* not duplicated */
+
+		if (IS_SLASH(output_dir[strlen(output_dir) - 1])) {
+			filename = xdebug_sprintf("%s%s", output_dir, fname);
 		} else {
-			filename = xdebug_sprintf("%s%c%s", XINI_TRACE(trace_output_dir), DEFAULT_SLASH, fname);
+			filename = xdebug_sprintf("%s%c%s", output_dir, DEFAULT_SLASH, fname);
 		}
 		xdfree(fname);
 	}
@@ -162,7 +167,7 @@ PHP_FUNCTION(xdebug_get_tracefile_name)
 	}
 }
 
-static int xdebug_include_or_eval_handler(zend_execute_data *execute_data)
+static int xdebug_include_or_eval_handler(XDEBUG_OPCODE_HANDLER_ARGS)
 {
 	zend_op_array *op_array = &execute_data->func->op_array;
 	const zend_op *opline = execute_data->opline;
@@ -177,7 +182,7 @@ static int xdebug_include_or_eval_handler(zend_execute_data *execute_data)
 
 		/* If there is no inc_filename, we're just bailing out instead */
 		if (!inc_filename) {
-			return ZEND_USER_OPCODE_DISPATCH;
+			return xdebug_call_original_opcode_handler_if_set(opline->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 		}
 
 		if (Z_TYPE_P(inc_filename) != IS_STRING) {
@@ -197,7 +202,8 @@ static int xdebug_include_or_eval_handler(zend_execute_data *execute_data)
 			zval_dtor(&tmp_inc_filename);
 		}
 	}
-	return ZEND_USER_OPCODE_DISPATCH;
+
+	return xdebug_call_original_opcode_handler_if_set(opline->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 }
 
 #if PHP_VERSION_ID >= 70400
@@ -488,7 +494,7 @@ static char *xdebug_find_var_name(zend_execute_data *execute_data, const zend_op
 	return name.d;
 }
 
-static int xdebug_common_assign_dim_handler(const char *op, int do_cc, zend_execute_data *execute_data)
+static int xdebug_common_assign_dim_handler(const char *op, int do_cc, XDEBUG_OPCODE_HANDLER_ARGS)
 {
 	char    *file;
 	zend_op_array *op_array = &execute_data->func->op_array;
@@ -506,7 +512,7 @@ static int xdebug_common_assign_dim_handler(const char *op, int do_cc, zend_exec
 
 	/* TODO TEST FOR ASSIGNMENTS IN FILTERING */
 //	if (xdebug_is_top_stack_frame_filtered(XDEBUG_FILTER_CODE_COVERAGE)) {
-//		return ZEND_USER_OPCODE_DISPATCH;
+//		return xdebug_call_original_opcode_handler_if_set(cur_opcode->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 //	}
 
 	xdebug_coverage_record_assign_if_active(execute_data, op_array, do_cc);
@@ -515,7 +521,7 @@ static int xdebug_common_assign_dim_handler(const char *op, int do_cc, zend_exec
 		char *full_varname;
 
 		if (cur_opcode->opcode == ZEND_QM_ASSIGN && cur_opcode->result_type != IS_CV) {
-			return ZEND_USER_OPCODE_DISPATCH;
+			return xdebug_call_original_opcode_handler_if_set(cur_opcode->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 		}
 		full_varname = xdebug_find_var_name(execute_data, execute_data->opline, NULL);
 
@@ -603,7 +609,8 @@ static int xdebug_common_assign_dim_handler(const char *op, int do_cc, zend_exec
 		}
 		xdfree(full_varname);
 	}
-	return ZEND_USER_OPCODE_DISPATCH;
+
+	return xdebug_call_original_opcode_handler_if_set(cur_opcode->opcode, XDEBUG_OPCODE_HANDLER_ARGS_PASSTHRU);
 }
 
 XDEBUG_OPCODE_OVERRIDE_ASSIGN(assign,"=",1)
@@ -723,9 +730,11 @@ void xdebug_tracing_post_deactivate(void)
 
 void xdebug_tracing_init_if_requested(zend_op_array *op_array)
 {
+	char *output_dir = xdebug_lib_get_output_dir(); /* not duplicated */
+
 	if (
 		(XINI_TRACE(auto_trace) || xdebug_trigger_enabled(XINI_TRACE(trace_enable_trigger), "XDEBUG_TRACE", XINI_TRACE(trace_enable_trigger_value)))
-		&& XINI_TRACE(trace_output_dir) && strlen(XINI_TRACE(trace_output_dir))
+		&& output_dir && strlen(output_dir)
 	) {
 		/* In case we do an auto-trace we are not interested in the return
 		 * value, but we still have to free it. */

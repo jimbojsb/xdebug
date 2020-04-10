@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2019 Derick Rethans                               |
+   | Copyright (c) 2002-2020 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,7 +22,6 @@
 
 typedef struct _xdebug_gc_stats_settings_t {
 	zend_bool  enable;
-	char      *output_dir;
 	char      *output_name;
 } xdebug_gc_stats_settings_t;
 
